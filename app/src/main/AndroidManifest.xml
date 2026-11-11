@@ -4,6 +4,10 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
+    <!-- Only used when you choose a profile photo from Downloads, Pictures or USB. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
     <!-- Lets the launcher see every TV app on Android 11+. -->
     <queries>
         <intent>
@@ -34,5 +38,12 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Exported so a profile photo can be set over adb (see README). -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="Lumen Settings"
+            android:screenOrientation="landscape" />
     </application>
 </manifest>

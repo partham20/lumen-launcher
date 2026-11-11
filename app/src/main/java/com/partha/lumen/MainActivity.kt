@@ -8,7 +8,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.SharedPreferences
 import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -40,35 +39,46 @@ import android.widget.ScrollView
 import android.widget.TextClock
 import android.widget.TextView
 import android.widget.Toast
+import java.util.Calendar
 import java.util.Collections
 
 /**
  * Lumen: a minimal home screen in the spirit of the Apple TV home.
  *
- * Layout, top to bottom: a "top shelf" showing the focused app's name over a
- * blurred, colour-tinted backdrop of its banner; a row of favourites; then a
- * grid of every other app. Hold OK (or press Menu) on a tile for options.
+ * Layout, top to bottom: a top bar (profile photo and greeting, clock and
+ * date); a "top shelf" showing the focused app's name over a blurred,
+ * colour-tinted backdrop of its banner; a row of favourites; then a grid of
+ * every other app. Hold OK (or press Menu) on a tile for options. Press Up to
+ * the profile photo and OK to open Lumen Settings.
  */
 class MainActivity : Activity() {
 
     private class App(val pkg: String, val component: ComponentName, val label: String, val info: ResolveInfo)
 
-    private lateinit var prefs: SharedPreferences
+    private lateinit var prefs: Prefs
     private lateinit var backdrop: ImageView
     private lateinit var title: TextView
     private lateinit var scroll: ScrollView
     private lateinit var favRow: LinearLayout
     private lateinit var grid: GridLayout
     private lateinit var allLabel: TextView
+    private lateinit var topBar: View
+    private lateinit var avatarImage: ImageView
+    private lateinit var avatarInitial: TextView
+    private lateinit var greeting: TextView
+    private lateinit var clock: TextClock
+    private lateinit var date: TextClock
 
     private val scrim = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0, 0, Color.BLACK))
     private var tintColor = Color.BLACK
     private var tintAnimator: ValueAnimator? = null
     private val bannerCache = HashMap<String, Drawable?>()
     private val colorCache = HashMap<String, Int>()
-    private var shelfPkg: String? = null
+    private var shelfApp: App? = null
     private var lastFocused: String? = null
     private var resumed = false
+    private var seenListVersion = -1
+    private var avatarStamp = 0L
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -80,7 +90,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("lumen", MODE_PRIVATE)
+        prefs = Prefs(this)
         window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
         setContentView(buildUi())
         applyScrim()
@@ -93,7 +103,6 @@ class MainActivity : Activity() {
         }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(packageReceiver, filter, RECEIVER_EXPORTED)
         else registerReceiver(packageReceiver, filter)
-        reload()
     }
 
     override fun onDestroy() {
@@ -104,6 +113,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        applyPrefs()
     }
 
     override fun onPause() {
@@ -128,9 +138,6 @@ class MainActivity : Activity() {
         backdrop = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             alpha = 0f
-            if (Build.VERSION.SDK_INT >= 31) {
-                setRenderEffect(RenderEffect.createBlurEffect(dp(40f), dp(40f), Shader.TileMode.CLAMP))
-            }
         }
         root.addView(backdrop, fill())
         root.addView(View(this).apply { background = scrim }, fill())
@@ -187,25 +194,131 @@ class MainActivity : Activity() {
         }
         content.addView(grid)
 
-        val clock = TextClock(this).apply {
-            format12Hour = "h:mm"
-            format24Hour = "HH:mm"
-            textSize = 20f
+        topBar = buildTopBar()
+        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
+
+        // The top bar fades away as the page scrolls down to the app grid.
+        scroll.setOnScrollChangeListener { _, _, y, _, _ ->
+            topBar.alpha = (1f - y / dp(90f)).coerceIn(0f, 1f)
+        }
+        return root
+    }
+
+    private fun buildTopBar(): View {
+        val bar = FrameLayout(this).apply {
+            setPadding(dpi(48), dpi(22), dpi(40), 0)
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        val left = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+        }
+        val avatar = FrameLayout(this).apply {
+            isFocusable = true
+            isClickable = true
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x40FFFFFF) }
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
+        }
+        avatarImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        avatar.addView(avatarImage, fill())
+        avatarInitial = text(18f, "sans-serif-medium", 1f).apply { gravity = Gravity.CENTER; setShadowLayer(0f, 0f, 0f, 0) }
+        avatar.addView(avatarInitial, fill())
+        val ring = View(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setStroke(dpi(2), Color.WHITE) }
+            alpha = 0f
+        }
+        avatar.addView(ring, fill())
+        avatar.setOnFocusChangeListener { v, has ->
+            v.animate().scaleX(if (has) 1.15f else 1f).scaleY(if (has) 1.15f else 1f).setDuration(160).start()
+            ring.animate().alpha(if (has) 1f else 0f).setDuration(160).start()
+        }
+        avatar.setOnClickListener { openSettings() }
+        avatar.setOnKeyListener { _, code, ev ->
+            if (code == KeyEvent.KEYCODE_DPAD_DOWN && ev.action == KeyEvent.ACTION_DOWN) { goToTop(); true } else false
+        }
+        left.addView(avatar, LinearLayout.LayoutParams(dpi(44), dpi(44)))
+
+        greeting = text(20f, "sans-serif-light", 0.95f).apply { setPadding(dpi(14), 0, 0, 0) }
+        left.addView(greeting)
+        bar.addView(left, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.CENTER_VERTICAL))
+
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+        }
+        clock = TextClock(this).apply {
+            textSize = 22f
             setTextColor(Color.WHITE)
-            alpha = 0.85f
+            alpha = 0.9f
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
             setShadowLayer(dp(6f), 0f, dp(1f), 0x99000000.toInt())
         }
-        root.addView(clock, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
-        ).apply { setMargins(0, dpi(24), dpi(40), 0) })
+        date = TextClock(this).apply {
+            format12Hour = "EEEE, d MMMM"
+            format24Hour = "EEEE, d MMMM"
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            alpha = 0.7f
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            setShadowLayer(dp(6f), 0f, dp(1f), 0x99000000.toInt())
+        }
+        right.addView(clock)
+        right.addView(date)
+        bar.addView(right, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
+        return bar
+    }
 
-        return root
+    /** Re-reads Lumen Settings; cheap enough to run on every resume. */
+    private fun applyPrefs() {
+        greeting.text = greetingText()
+        greeting.visibility = if (prefs.greeting == "off") View.GONE else View.VISIBLE
+
+        avatarInitial.text = prefs.name.trim().take(1).uppercase()
+        val file = Avatar.file(this)
+        val stamp = if (file.exists()) file.lastModified() else 0L
+        if (stamp != avatarStamp) {
+            avatarStamp = stamp
+            avatarImage.setImageBitmap(Avatar.load(this))
+        }
+        avatarInitial.visibility = if (stamp == 0L) View.VISIBLE else View.GONE
+
+        date.visibility = if (prefs.showDate) View.VISIBLE else View.GONE
+        val clockFormat = if (prefs.clock24) "HH:mm" else "h:mm"
+        clock.format12Hour = clockFormat
+        clock.format24Hour = clockFormat
+
+        if (Build.VERSION.SDK_INT >= 31) {
+            backdrop.setRenderEffect(if (prefs.artwork) RenderEffect.createBlurEffect(dp(40f), dp(40f), Shader.TileMode.CLAMP) else null)
+        }
+        backdrop.visibility = if (prefs.artwork) View.VISIBLE else View.GONE
+
+        if (prefs.listVersion != seenListVersion) {
+            seenListVersion = prefs.listVersion
+            reload()
+        }
+        // Repaint the shelf in case the colour or artwork setting changed.
+        shelfApp?.let { shelfApp = null; showShelf(it) }
+    }
+
+    private fun greetingText(): String {
+        val name = prefs.name.trim()
+        if (prefs.greeting != "time") return "Welcome, $name"
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val part = when (hour) {
+            in 5..11 -> "Good morning"
+            in 12..16 -> "Good afternoon"
+            else -> "Good evening"
+        }
+        return "$part, $name"
     }
 
     private fun reload() {
         val pm = packageManager
-        val hidden = hiddenSet()
+        val hidden = prefs.hidden
         val seen = HashSet<String>()
         val all = pm.queryIntentActivities(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0
@@ -215,7 +328,7 @@ class MainActivity : Activity() {
             else App(pkg, ComponentName(pkg, ri.activityInfo.name), ri.loadLabel(pm).toString(), ri)
         }
         val byPkg = all.associateBy { it.pkg }
-        val favPkgs = favourites().filter { it in byPkg && it !in hidden }
+        val favPkgs = prefs.favourites.filter { it in byPkg && it !in hidden }
         val rest = all.filter { it.pkg !in favPkgs && it.pkg !in hidden }.sortedBy { it.label.lowercase() }
 
         favRow.removeAllViews()
@@ -298,18 +411,20 @@ class MainActivity : Activity() {
     // ---- Top shelf -----------------------------------------------------------
 
     private fun showShelf(app: App) {
-        if (shelfPkg == app.pkg) return
-        shelfPkg = app.pkg
+        if (shelfApp?.pkg == app.pkg) return
+        shelfApp = app
         title.text = app.label
 
         val art = bannerOf(app) ?: app.info.loadIcon(packageManager)
-        val copy = art.constantState?.newDrawable(resources)?.mutate() ?: art
-        backdrop.animate().cancel()
-        backdrop.animate().alpha(0f).setDuration(120).withEndAction {
-            backdrop.setImageDrawable(copy)
-            backdrop.animate().alpha(0.55f).setDuration(320).start()
-        }.start()
-        tintTo(accentOf(app, art))
+        if (prefs.artwork) {
+            val copy = art.constantState?.newDrawable(resources)?.mutate() ?: art
+            backdrop.animate().cancel()
+            backdrop.animate().alpha(0f).setDuration(120).withEndAction {
+                backdrop.setImageDrawable(copy)
+                backdrop.animate().alpha(0.55f).setDuration(320).start()
+            }.start()
+        }
+        tintTo(if (prefs.dynamicTint) accentOf(app, art) else DARK_TINT)
     }
 
     private fun tintTo(target: Int) {
@@ -370,17 +485,19 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun openSettings() = startActivity(Intent(this, SettingsActivity::class.java))
+
     private fun options(app: App, fav: Boolean) {
         val actions = ArrayList<Pair<String, () -> Unit>>()
         if (fav) {
             actions += "Move left" to { moveFav(app.pkg, -1) }
             actions += "Move right" to { moveFav(app.pkg, +1) }
-            actions += "Remove from Favourites" to { saveFavs(visibleFavs().apply { remove(app.pkg) }); reload() }
+            actions += "Remove from Favourites" to { prefs.favourites = visibleFavs().apply { remove(app.pkg) }; reload() }
         } else {
-            actions += "Add to Favourites" to { saveFavs(visibleFavs().apply { add(app.pkg) }); reload() }
+            actions += "Add to Favourites" to { prefs.favourites = visibleFavs().apply { add(app.pkg) }; reload() }
         }
         actions += "Hide ${app.label}" to {
-            saveHidden(hiddenSet().apply { add(app.pkg) })
+            prefs.hidden = prefs.hidden + app.pkg
             lastFocused = null
             reload()
         }
@@ -388,8 +505,7 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", app.pkg, null))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
-        val hidden = hiddenSet()
-        if (hidden.isNotEmpty()) actions += "Show hidden apps (${hidden.size})" to { saveHidden(emptySet()); reload() }
+        actions += "Lumen settings" to { openSettings() }
 
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(app.label)
@@ -403,7 +519,7 @@ class MainActivity : Activity() {
         val to = from + delta
         if (from < 0 || to !in list.indices) return
         Collections.swap(list, from, to)
-        saveFavs(list)
+        prefs.favourites = list
         reload()
     }
 
@@ -412,31 +528,10 @@ class MainActivity : Activity() {
         (favRow.getChildAt(0) ?: grid.getChildAt(0))?.requestFocus()
     }
 
-    // ---- Storage ---------------------------------------------------------------
-
-    private val defaultFavs = listOf(
-        "com.netflix.ninja",
-        "com.google.android.youtube.tv",
-        "in.startv.hotstar",
-        "com.amazon.amazonvideo.livingroom",
-        "com.spotify.tv.android",
-        "com.mxtech.videoplayer.television",
-    )
-    private val defaultHidden = setOf("me.efesser.flauncher", "com.vt.tv.mobiledeviceconnectiontips")
-
-    private fun favourites(): List<String> =
-        prefs.getString("favs", null)?.split(',')?.filter { it.isNotEmpty() } ?: defaultFavs
-
-    private fun saveFavs(list: List<String>) = prefs.edit().putString("favs", list.joinToString(",")).apply()
-
-    private fun hiddenSet(): MutableSet<String> = HashSet(prefs.getStringSet("hidden", defaultHidden)!!)
-
-    private fun saveHidden(set: Set<String>) = prefs.edit().putStringSet("hidden", set).apply()
+    // ---- Helpers -----------------------------------------------------------------
 
     private fun visibleFavs(): MutableList<String> =
         (0 until favRow.childCount).map { favRow.getChildAt(it).tag as String }.toMutableList()
-
-    // ---- Helpers -----------------------------------------------------------------
 
     private fun bannerOf(app: App): Drawable? = bannerCache.getOrPut(app.pkg) {
         try { app.info.activityInfo.loadBanner(packageManager) } catch (e: Exception) { null }
@@ -466,4 +561,8 @@ class MainActivity : Activity() {
         (Color.green(a) * (1 - t) + Color.green(b) * t).toInt(),
         (Color.blue(a) * (1 - t) + Color.blue(b) * t).toInt(),
     )
+
+    private companion object {
+        const val DARK_TINT = 0xFF15161B.toInt()
+    }
 }
