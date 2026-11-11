@@ -2,7 +2,6 @@ package com.partha.lumen
 
 import android.animation.ValueAnimator
 import android.app.Activity
-import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -70,7 +69,6 @@ class MainActivity : Activity() {
     private lateinit var clock: TextClock
     private lateinit var date: TextClock
     private lateinit var closeButton: View
-    private var installedPkgs = emptyList<String>()
 
     private val scrim = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0, 0, Color.BLACK))
     private var tintColor = Color.BLACK
@@ -315,27 +313,10 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Stops the background processes of every installed TV app except the ones
-     * on the keep-running list (Spotify by default), then reports memory freed.
-     * Apps keep their place in the system's recents, but no longer use memory.
+     * Stops every TV app's background processes except the keep-running list
+     * (Spotify by default). See [AppCloser].
      */
-    private fun closeApps() {
-        val am = getSystemService(ActivityManager::class.java)
-        val before = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
-        val keep = prefs.keepRunning
-        installedPkgs.filter { it !in keep }.forEach { am.killBackgroundProcesses(it) }
-
-        closeButton.postDelayed({
-            val after = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
-            val freedMb = ((after - before) / (1024 * 1024)).coerceAtLeast(0)
-            val kept = if (keep.isEmpty()) "" else " · kept ${keepLabels(keep)}"
-            Toast.makeText(this, "Apps closed · $freedMb MB freed$kept", Toast.LENGTH_LONG).show()
-        }, 1500)
-    }
-
-    private fun keepLabels(pkgs: Set<String>): String = pkgs.mapNotNull { pkg ->
-        try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (e: Exception) { null }
-    }.sorted().joinToString(", ")
+    private fun closeApps() = AppCloser.closeAll(this)
 
     /** Re-reads Lumen Settings; cheap enough to run on every resume. */
     private fun applyPrefs() {
@@ -393,7 +374,6 @@ class MainActivity : Activity() {
             if (pkg == packageName || !seen.add(pkg)) null
             else App(pkg, ComponentName(pkg, ri.activityInfo.name), ri.loadLabel(pm).toString(), ri)
         }
-        installedPkgs = all.map { it.pkg }
         val byPkg = all.associateBy { it.pkg }
         val favPkgs = prefs.favourites.filter { it in byPkg && it !in hidden }
         val rest = all.filter { it.pkg !in favPkgs && it.pkg !in hidden }.sortedBy { it.label.lowercase() }

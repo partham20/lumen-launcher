@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_service_label">Lumen remote buttons</string>
+    <string name="remote_service_desc">Lets Lumen use your remote\'s Settings button for Quick Settings and the Live TV button to close apps. Lumen only watches remote button presses and never reads what is on screen.</string>
+</resources>

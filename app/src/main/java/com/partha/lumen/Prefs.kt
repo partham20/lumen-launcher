@@ -1,6 +1,7 @@
 package com.partha.lumen
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File
@@ -45,6 +46,27 @@ class Prefs(context: Context) {
     var keepRunning: Set<String>
         get() = HashSet(sp.getStringSet("keepRunning", DEFAULT_KEEP_RUNNING)!!)
         set(v) = sp.edit().putStringSet("keepRunning", v).apply()
+
+    /** Remote button for Quick Settings, as a [Keys] id; -1 means the default buttons. */
+    var quickKey: Int
+        get() = sp.getInt("quickKey", -1)
+        set(v) = sp.edit().putInt("quickKey", v).apply()
+
+    /** Remote button that closes apps, as a [Keys] id; -1 means the default buttons. */
+    var closeKey: Int
+        get() = sp.getInt("closeKey", -1)
+        set(v) = sp.edit().putInt("closeKey", v).apply()
+
+    /** "quick" or "close" while waiting for the user to press a button to assign; "" otherwise. */
+    var learning: String
+        get() = sp.getString("learning", "")!!
+        set(v) = sp.edit().putString("learning", v).apply()
+
+    fun onChange(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        sp.registerOnSharedPreferenceChangeListener(listener)
+
+    fun stopOnChange(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        sp.unregisterOnSharedPreferenceChangeListener(listener)
 
     var favourites: List<String>
         get() = sp.getString("favs", null)?.split(',')?.filter { it.isNotEmpty() } ?: DEFAULT_FAVS

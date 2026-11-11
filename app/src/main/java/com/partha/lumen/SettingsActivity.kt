@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -45,7 +46,6 @@ class SettingsActivity : Activity() {
         prefs = Prefs(this)
         setContentView(buildUi())
         intent.getStringExtra("import_avatar")?.let { importPhoto(File(it)) }
-        render()
     }
 
     private fun buildUi(): View {
@@ -105,8 +105,14 @@ class SettingsActivity : Activity() {
         row("Background colour", if (prefs.dynamicTint) "Match app" else "Dark") { prefs.dynamicTint = !prefs.dynamicTint; render() }
         row("App artwork backdrop", onOff(prefs.artwork)) { prefs.artwork = !prefs.artwork; render() }
 
+        section("Remote")
+        val remoteOn = RemoteService.isEnabled(this)
+        row("Remote buttons", if (remoteOn) "On" else "Off · turn on") { openAccessibilitySettings() }
+        row("Quick Settings button", buttonLabel(prefs.quickKey, "Settings ⚙")) { assignButton("quick", "Quick Settings") }
+        row("Close apps button", buttonLabel(prefs.closeKey, "Live TV 📺")) { assignButton("close", "Close apps") }
+
         section("Apps")
-        row("Close apps button", onOff(prefs.closeButton)) { prefs.closeButton = !prefs.closeButton; render() }
+        row("Close apps on home screen", onOff(prefs.closeButton)) { prefs.closeButton = !prefs.closeButton; render() }
         row("Keep running when closing", keepRunningLabel()) { chooseKeepRunning() }
         row("Hidden apps", "${prefs.hidden.size} hidden") { chooseHidden() }
         row("Reset favourites", "") { confirmResetFavourites() }
@@ -131,30 +137,10 @@ class SettingsActivity : Activity() {
 
     private fun row(title: String, value: String, onClick: () -> Unit) {
         val index = (0 until list.childCount).count { list.getChildAt(it).isFocusable }
-        val idle = GradientDrawable().apply { cornerRadius = dp(10f); setColor(0x14FFFFFF) }
-        val active = GradientDrawable().apply { cornerRadius = dp(10f); setColor(0xF2FFFFFF.toInt()) }
-
-        val titleView = label(17f, "sans-serif", 1f).apply { text = title }
-        val valueView = label(15f, "sans-serif", 1f).apply {
-            text = value
-            gravity = Gravity.END
-            setTextColor(0x99FFFFFF.toInt())
-        }
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            isFocusable = true
-            isClickable = true
-            background = idle
-            setPadding(dpi(18), dpi(13), dpi(18), dpi(13))
-            addView(titleView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(valueView)
-        }
+        val row = TvRow(this, title, value)
+        val styleFocus = row.onFocusChangeListener
         row.setOnFocusChangeListener { v, has ->
-            v.background = if (has) active else idle
-            titleView.setTextColor(if (has) Color.BLACK else Color.WHITE)
-            valueView.setTextColor(if (has) 0xFF555560.toInt() else 0x99FFFFFF.toInt())
-            v.animate().scaleX(if (has) 1.02f else 1f).scaleY(if (has) 1.02f else 1f).setDuration(120).start()
+            styleFocus.onFocusChange(v, has)
             if (has) focusedRow = index
         }
         row.setOnClickListener { onClick() }
@@ -261,6 +247,64 @@ class SettingsActivity : Activity() {
     private fun importPhoto(file: File) {
         val ok = try { Avatar.import(this, file) } catch (e: Exception) { false }
         toast(if (ok) "Profile photo updated" else "Couldn't read ${file.name}")
+        render()
+    }
+
+    // ---- Remote --------------------------------------------------------------
+
+    private fun buttonLabel(saved: Int, default: String) = if (saved < 0) default else Keys.name(saved)
+
+    /** Accessibility services are a security setting, so the user switches this on themselves. */
+    private fun openAccessibilitySettings() {
+        dialog()
+            .setTitle("Turn on remote buttons")
+            .setMessage(
+                "On the next screen, open \"Lumen remote buttons\" and switch it on.\n\n" +
+                    "Lumen only watches remote button presses. It doesn't read anything on screen."
+            )
+            .setPositiveButton("Open accessibility") { _, _ ->
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (e: Exception) {
+                    startActivity(Intent(Settings.ACTION_SETTINGS))
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Waits for the next remote button press (caught by [RemoteService]) and saves it. */
+    private fun assignButton(target: String, what: String) {
+        if (!RemoteService.isEnabled(this)) {
+            openAccessibilitySettings()
+            return
+        }
+        prefs.learning = target
+        val waiting = dialog()
+            .setTitle(what)
+            .setMessage("Press the remote button you want to use.\n\nPress Back to cancel.")
+            .setNeutralButton("Use default button") { _, _ ->
+                prefs.learning = ""
+                if (target == "quick") prefs.quickKey = -1 else prefs.closeKey = -1
+                render()
+            }
+            .create()
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "learning" && prefs.learning.isEmpty()) {
+                waiting.dismiss()
+                render()
+            }
+        }
+        prefs.onChange(listener)
+        waiting.setOnDismissListener {
+            prefs.stopOnChange(listener)
+            prefs.learning = ""
+        }
+        waiting.show()
+    }
+
+    override fun onResume() {
+        super.onResume()
         render()
     }
 
