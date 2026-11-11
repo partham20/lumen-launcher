@@ -2,6 +2,7 @@ package com.partha.lumen
 
 import android.animation.ValueAnimator
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -68,6 +69,8 @@ class MainActivity : Activity() {
     private lateinit var greeting: TextView
     private lateinit var clock: TextClock
     private lateinit var date: TextClock
+    private lateinit var closeButton: View
+    private var installedPkgs = emptyList<String>()
 
     private val scrim = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0, 0, Color.BLACK))
     private var tintColor = Color.BLACK
@@ -133,7 +136,7 @@ class MainActivity : Activity() {
     // ---- UI ----------------------------------------------------------------
 
     private fun buildUi(): View {
-        val root = FrameLayout(this)
+        val root = FrameLayout(this).apply { clipChildren = false }
 
         backdrop = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -206,7 +209,8 @@ class MainActivity : Activity() {
 
     private fun buildTopBar(): View {
         val bar = FrameLayout(this).apply {
-            setPadding(dpi(48), dpi(22), dpi(40), 0)
+            // Bottom padding leaves room for the enlarged photo when it's focused.
+            setPadding(dpi(44), dpi(40), dpi(48), dpi(12))
             clipChildren = false
             clipToPadding = false
         }
@@ -216,17 +220,22 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
         }
+        // The focus ring sits just outside the photo, so the photo's circular clip can't cut it.
         val avatar = FrameLayout(this).apply {
             isFocusable = true
             isClickable = true
+            clipChildren = false
+        }
+        val photo = FrameLayout(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x40FFFFFF) }
             outlineProvider = ViewOutlineProvider.BACKGROUND
             clipToOutline = true
         }
         avatarImage = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-        avatar.addView(avatarImage, fill())
+        photo.addView(avatarImage, fill())
         avatarInitial = text(18f, "sans-serif-medium", 1f).apply { gravity = Gravity.CENTER; setShadowLayer(0f, 0f, 0f, 0) }
-        avatar.addView(avatarInitial, fill())
+        photo.addView(avatarInitial, fill())
+        avatar.addView(photo, FrameLayout.LayoutParams(dpi(44), dpi(44), Gravity.CENTER))
         val ring = View(this).apply {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setStroke(dpi(2), Color.WHITE) }
             alpha = 0f
@@ -240,13 +249,22 @@ class MainActivity : Activity() {
         avatar.setOnKeyListener { _, code, ev ->
             if (code == KeyEvent.KEYCODE_DPAD_DOWN && ev.action == KeyEvent.ACTION_DOWN) { goToTop(); true } else false
         }
-        left.addView(avatar, LinearLayout.LayoutParams(dpi(44), dpi(44)))
+        left.addView(avatar, LinearLayout.LayoutParams(dpi(52), dpi(52)))
 
-        greeting = text(20f, "sans-serif-light", 0.95f).apply { setPadding(dpi(14), 0, 0, 0) }
+        greeting = text(20f, "sans-serif-light", 0.95f).apply { setPadding(dpi(10), 0, 0, 0) }
         left.addView(greeting)
         bar.addView(left, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.CENTER_VERTICAL))
 
         val right = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        closeButton = pillButton("Close apps") { closeApps() }
+        right.addView(closeButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { marginEnd = dpi(24) })
+
+        val time = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.END
         }
@@ -266,11 +284,58 @@ class MainActivity : Activity() {
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setShadowLayer(dp(6f), 0f, dp(1f), 0x99000000.toInt())
         }
-        right.addView(clock)
-        right.addView(date)
+        time.addView(clock)
+        time.addView(date)
+        right.addView(time)
         bar.addView(right, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.END or Gravity.CENTER_VERTICAL))
         return bar
     }
+
+    /** A rounded glass button that turns white when focused, like the tvOS top bar. */
+    private fun pillButton(label: String, onClick: () -> Unit): View {
+        val idle = GradientDrawable().apply { cornerRadius = dp(20f); setColor(0x33FFFFFF) }
+        val active = GradientDrawable().apply { cornerRadius = dp(20f); setColor(0xF2FFFFFF.toInt()) }
+        return text(14f, "sans-serif-medium", 1f).apply {
+            text = label
+            isFocusable = true
+            isClickable = true
+            background = idle
+            setShadowLayer(0f, 0f, 0f, 0)
+            setPadding(dpi(16), dpi(8), dpi(16), dpi(8))
+            setOnFocusChangeListener { v, has ->
+                v.background = if (has) active else idle
+                setTextColor(if (has) Color.BLACK else Color.WHITE)
+                v.animate().scaleX(if (has) 1.08f else 1f).scaleY(if (has) 1.08f else 1f).setDuration(140).start()
+            }
+            setOnClickListener { onClick() }
+            setOnKeyListener { _, code, ev ->
+                if (code == KeyEvent.KEYCODE_DPAD_DOWN && ev.action == KeyEvent.ACTION_DOWN) { goToTop(); true } else false
+            }
+        }
+    }
+
+    /**
+     * Stops the background processes of every installed TV app except the ones
+     * on the keep-running list (Spotify by default), then reports memory freed.
+     * Apps keep their place in the system's recents, but no longer use memory.
+     */
+    private fun closeApps() {
+        val am = getSystemService(ActivityManager::class.java)
+        val before = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
+        val keep = prefs.keepRunning
+        installedPkgs.filter { it !in keep }.forEach { am.killBackgroundProcesses(it) }
+
+        closeButton.postDelayed({
+            val after = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
+            val freedMb = ((after - before) / (1024 * 1024)).coerceAtLeast(0)
+            val kept = if (keep.isEmpty()) "" else " · kept ${keepLabels(keep)}"
+            Toast.makeText(this, "Apps closed · $freedMb MB freed$kept", Toast.LENGTH_LONG).show()
+        }, 1500)
+    }
+
+    private fun keepLabels(pkgs: Set<String>): String = pkgs.mapNotNull { pkg ->
+        try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (e: Exception) { null }
+    }.sorted().joinToString(", ")
 
     /** Re-reads Lumen Settings; cheap enough to run on every resume. */
     private fun applyPrefs() {
@@ -287,6 +352,7 @@ class MainActivity : Activity() {
         avatarInitial.visibility = if (stamp == 0L) View.VISIBLE else View.GONE
 
         date.visibility = if (prefs.showDate) View.VISIBLE else View.GONE
+        closeButton.visibility = if (prefs.closeButton) View.VISIBLE else View.GONE
         val clockFormat = if (prefs.clock24) "HH:mm" else "h:mm"
         clock.format12Hour = clockFormat
         clock.format24Hour = clockFormat
@@ -327,6 +393,7 @@ class MainActivity : Activity() {
             if (pkg == packageName || !seen.add(pkg)) null
             else App(pkg, ComponentName(pkg, ri.activityInfo.name), ri.loadLabel(pm).toString(), ri)
         }
+        installedPkgs = all.map { it.pkg }
         val byPkg = all.associateBy { it.pkg }
         val favPkgs = prefs.favourites.filter { it in byPkg && it !in hidden }
         val rest = all.filter { it.pkg !in favPkgs && it.pkg !in hidden }.sortedBy { it.label.lowercase() }

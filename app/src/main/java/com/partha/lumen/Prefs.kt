@@ -36,6 +36,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("artwork", true)
         set(v) = sp.edit().putBoolean("artwork", v).apply()
 
+    /** Show the "Close apps" button in the top bar. */
+    var closeButton: Boolean
+        get() = sp.getBoolean("closeButton", true)
+        set(v) = sp.edit().putBoolean("closeButton", v).apply()
+
+    /** Apps that "Close apps" leaves running. */
+    var keepRunning: Set<String>
+        get() = HashSet(sp.getStringSet("keepRunning", DEFAULT_KEEP_RUNNING)!!)
+        set(v) = sp.edit().putStringSet("keepRunning", v).apply()
+
     var favourites: List<String>
         get() = sp.getString("favs", null)?.split(',')?.filter { it.isNotEmpty() } ?: DEFAULT_FAVS
         set(v) = sp.edit().putString("favs", v.joinToString(",")).putInt("listVersion", listVersion + 1).apply()
@@ -59,6 +69,7 @@ class Prefs(context: Context) {
             "com.mxtech.videoplayer.television",
         )
         val DEFAULT_HIDDEN = setOf("me.efesser.flauncher", "com.vt.tv.mobiledeviceconnectiontips")
+        val DEFAULT_KEEP_RUNNING = setOf("com.spotify.tv.android")
     }
 }
 

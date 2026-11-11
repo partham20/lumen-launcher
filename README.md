@@ -13,6 +13,7 @@ A minimal Android TV home screen in the spirit of the Apple TV home.
 - **Hold OK** (or press **Menu**) on a tile to add/remove favourites, move them left/right, hide an app, open App info, or open Lumen settings.
 - **Back** or **Home** jumps to the first favourite.
 - **Up** to your profile photo, then **OK**, opens **Lumen Settings**.
+- **Close apps** (top bar) stops every TV app's background processes except the ones on your keep-running list (Spotify by default), then shows how much memory was freed. Apps stay in the system's recents list; Android doesn't let a launcher clear that.
 
 ## Lumen Settings (on the TV)
 
@@ -21,7 +22,7 @@ Changes apply as soon as you go back to the home screen; no rebuild needed.
 - **Profile**: your name, greeting (Welcome / Good morning·afternoon·evening / Off), profile photo (picked from Downloads, Pictures, DCIM or a USB drive).
 - **Clock**: show day and date, 12- or 24-hour time.
 - **Look**: background colour that matches the focused app or stays dark; blurred app artwork on/off (off is a little faster).
-- **Apps**: choose hidden apps, reset favourites.
+- **Apps**: show or hide the Close apps button, choose which apps keep running when closing, choose hidden apps, reset favourites.
 - **System**: open the Android TV settings.
 
 To set the profile photo from a computer instead:

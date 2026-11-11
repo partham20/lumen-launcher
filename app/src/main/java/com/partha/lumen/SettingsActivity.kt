@@ -106,6 +106,8 @@ class SettingsActivity : Activity() {
         row("App artwork backdrop", onOff(prefs.artwork)) { prefs.artwork = !prefs.artwork; render() }
 
         section("Apps")
+        row("Close apps button", onOff(prefs.closeButton)) { prefs.closeButton = !prefs.closeButton; render() }
+        row("Keep running when closing", keepRunningLabel()) { chooseKeepRunning() }
         row("Hidden apps", "${prefs.hidden.size} hidden") { chooseHidden() }
         row("Reset favourites", "") { confirmResetFavourites() }
 
@@ -264,24 +266,43 @@ class SettingsActivity : Activity() {
 
     // ---- Apps ----------------------------------------------------------------
 
-    private fun chooseHidden() {
+    /** Every TV app except Lumen, as (package, label), sorted by label. */
+    private fun tvApps(): List<Pair<String, String>> {
         val pm = packageManager
         val seen = HashSet<String>()
-        val apps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0)
+        return pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0)
             .filter { it.activityInfo.packageName != packageName && seen.add(it.activityInfo.packageName) }
             .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
             .sortedBy { it.second.lowercase() }
-        val hidden = prefs.hidden.toMutableSet()
-        val checked = apps.map { it.first in hidden }.toBooleanArray()
+    }
 
+    /** A tick-list of TV apps; [save] gets the ticked packages. */
+    private fun chooseApps(title: String, selected: Set<String>, save: (Set<String>) -> Unit) {
+        val apps = tvApps()
+        val picked = selected.toMutableSet()
+        val checked = apps.map { it.first in picked }.toBooleanArray()
         dialog()
-            .setTitle("Hidden apps")
+            .setTitle(title)
             .setMultiChoiceItems(apps.map { it.second }.toTypedArray(), checked) { _, i, on ->
-                if (on) hidden += apps[i].first else hidden -= apps[i].first
+                if (on) picked += apps[i].first else picked -= apps[i].first
             }
-            .setPositiveButton("Save") { _, _ -> prefs.hidden = hidden; render() }
+            .setPositiveButton("Save") { _, _ -> save(picked); render() }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun chooseHidden() = chooseApps("Hidden apps", prefs.hidden) { prefs.hidden = it }
+
+    private fun chooseKeepRunning() = chooseApps("Keep running when closing", prefs.keepRunning) { prefs.keepRunning = it }
+
+    private fun keepRunningLabel(): String {
+        val keep = prefs.keepRunning
+        val names = tvApps().filter { it.first in keep }.map { it.second }
+        return when {
+            names.isEmpty() -> "None"
+            names.size <= 2 -> names.joinToString(", ")
+            else -> "${names.size} apps"
+        }
     }
 
     private fun confirmResetFavourites() {
